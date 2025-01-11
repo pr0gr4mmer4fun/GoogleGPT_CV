@@ -1,0 +1,127 @@
+# Author: [Jared Mendoza]
+# Date: [6/4/2024]
+# Description: [Multi model web scraper for computer vision tasks in identifying 
+# persons and objects and providing technical information about the result]
+
+import time
+import cv2
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+import easyocr
+import openai
+
+#####################################################################################
+# remember to set your OpenAI API key!
+# 3.5 turbo key goes here please experiment with different AI's to find the best fit for you
+openai.api_key = "key_goes_here"
+
+
+#####################################################################################
+
+def capture_image(image_path):
+    cap = cv2.VideoCapture(0)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to capture image")
+            break
+
+        cv2.imshow('Camera', frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('s'):
+            cv2.imwrite(image_path, frame)
+            print(f"Image saved at {image_path}")
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+def upload_image_to_google(driver, image_path):
+    driver.get('https://lens.google.com/')
+
+    time.sleep(2)
+    print("Finding the camera icon...")
+    try:
+        camera_icon = driver.find_element(By.CSS_SELECTOR, 'div[aria-label="Search by image"]')
+        driver.execute_script("arguments[0].click();", camera_icon)
+    except Exception as e:
+        print(f"Failed to find camera icon: {e}")
+        driver.quit()
+        return None
+
+    time.sleep(2)
+    print("Finding the 'Upload an image' tab...")
+    try:
+        upload_image_tab = driver.find_element(By.XPATH, '//input[@type="file" and @name="encoded_image"]')
+        abs_image_path = os.path.abspath(image_path)
+        upload_image_tab.send_keys(abs_image_path)
+    except Exception as e:
+        print(f"Failed to find 'Upload an image' tab: {e}")
+        driver.quit()
+        return None
+
+    time.sleep(5)  # Wait for results to load
+    return driver
+
+
+def take_screenshot(driver, screenshot_path):
+    driver.save_screenshot(screenshot_path)
+    print(f"Screenshot saved at {screenshot_path}")
+
+
+def extract_text_easyocr(image_path):
+    reader = easyocr.Reader(['en'])
+    result = reader.readtext(image_path)
+    return " ".join([text for (_, text, _) in result])
+
+
+def analyze_text_with_gpt3(text):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "system",
+                "content": "Extract the main object or person described in the following text. If it's an object, provide key technical specifications in a concise bulleted list. If it's a person, provide a brief descriptive summary"
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ],
+        temperature=0.9,
+        max_tokens=80,
+        top_p=1
+    )
+    return response.choices[0].message["content"].strip()
+
+
+if __name__ == "__main__":
+    image_path = "captured_image.jpg"
+    screenshot_path = "webpage_screenshot.png"
+
+    capture_image(image_path)
+
+    # Set up Selenium WebDriver with some options
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")  # Start with browser maximized
+    options.add_argument("--disable-extensions")  # Disable extensions
+    options.add_argument("--disable-gpu")  # Disable GPU acceleration
+
+    # Replace this with your actual ChromeDriver path make sure to use chrome driver version that is the same as your OS ex. windows 64 bit use chromedriver 64 bit
+    PATH = "C:\\Users\\user\\file\\file\\chromedriver.exe"
+    service = Service(PATH)
+    driver = webdriver.Chrome(service=service, options=options)
+
+    driver = upload_image_to_google(driver, image_path)
+    if driver:
+        take_screenshot(driver, screenshot_path)
+        driver.quit()
+
+        text_from_image = extract_text_easyocr(screenshot_path)
+        print(f"Extracted Text: {text_from_image}")
+
+        consensus = analyze_text_with_gpt3(text_from_image)
+        print(f"General Consensus on Detected item: {consensus}")
